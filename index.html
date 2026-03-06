@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ARGUS - 完整盲操作旗艦版</title>
+    <title>ARGUS</title>
 
     <style>
         :root { 
@@ -56,7 +56,7 @@
 
 <body>
     <div class="card">
-        <h2>👁 ARGUS 旗艦盲操作版</h2>
+        <h2>ARGUS</h2>
         <div id="statusTxt">系統啟動中...</div>
 
         <div style="height: 260px; background: #000; border-radius: 20px; margin: 15px 0; overflow: hidden;">
@@ -68,7 +68,7 @@
     </div>
 
     <script>
-        const KEY = "AIzaSyD5KxeQolTM0CHm2fHWliiJ5cPnpq-Wf9I";
+        const KEY = "AIzaSyC1JEtV9qLDaojotl27KSoGm_pd8XuxmtU";
         const MODEL = "gemini-2.5-flash";
 
         const video = document.getElementById("webcam");
@@ -87,7 +87,7 @@
         let speechQueue = [];
         let speaking = false;
         
-        // 🌟 新增：用來記錄「是否已經播放過教學」的變數
+        // 新增：用來記錄「是否已經播放過教學」的變數
         let hasPlayedIntro = false; 
 
         /* ================= 語音系統 ================= */
@@ -141,13 +141,13 @@
                 video.style.transform = mode === "user" ? "scaleX(-1)" : "scaleX(1)";
                 statusTxt.innerText = "● 系統就緒";
                 
-                // 🌟 修正：檢查是否播過教學，沒播過才播，播過就把開關關掉
+                // 修正：檢查是否播過教學，沒播過才播，播過就把開關關掉
                 if (!hasPlayedIntro) {
                     setTimeout(introGuide, 800);
                     hasPlayedIntro = true; 
                 }
             } catch {
-                log.innerHTML = "❌ 無法存取相機";
+                log.innerHTML = "無法存取相機";
             }
         }
         startCamera(currentFacingMode);
@@ -165,7 +165,7 @@
             if (isProcessing) return;
             stopSpeech();
             isProcessing = true;
-            log.innerHTML = "🧠 正在解析影像...";
+            log.innerHTML = "正在解析影像...";
 
             const ctx = canvas.getContext("2d");
             canvas.width = video.videoWidth;
@@ -191,7 +191,7 @@
                 log.innerHTML = `<span class="highlight">${text}</span>`;
                 speak(text);
             } catch {
-                log.innerHTML = "❌ 辨識失敗";
+                log.innerHTML = "辨識失敗";
             }
             isProcessing = false;
         }
@@ -202,7 +202,7 @@
             if (isProcessing) return;
             stopSpeech();
             isProcessing = true;
-            log.innerHTML = "🛰️ 正在掃描周邊...";
+            log.innerHTML = "正在掃描周邊...";
 
             navigator.geolocation.getCurrentPosition(async (pos) => {
                 const { latitude: lat, longitude: lon } = pos.coords;
@@ -236,7 +236,7 @@
                     });
 
                 } catch {
-                    log.innerHTML = "❌ 掃描失敗";
+                    log.innerHTML = "掃描失敗";
                 }
                 isProcessing = false;
             });
