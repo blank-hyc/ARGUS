@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-TW">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ARGUS</title>
+    <title>ARGUS-VisionEcho (Robofest Edition)</title>
 
     <style>
         :root { 
@@ -13,7 +13,7 @@
             --green: #10b981; 
         }
         body {
-            font-family: system-ui;
+            font-family: system-ui, -apple-system, sans-serif;
             background: var(--bg);
             color: #f8fafc;
             display: flex;
@@ -42,9 +42,11 @@
             border-radius: 15px;
             max-height: 200px;
             overflow-y: auto;
+            font-size: 1.1rem;
+            line-height: 1.5;
         }
         .highlight { 
-            color: #fff; 
+            color: var(--accent); 
             font-weight: bold; 
         }
         .shop-item { 
@@ -57,19 +59,27 @@
 <body>
     <div class="card">
         <h2>ARGUS</h2>
-        <div id="statusTxt">系統啟動中...</div>
+        <div id="statusTxt">System initializing...</div>
 
-        <div style="height: 260px; background: #000; border-radius: 20px; margin: 15px 0; overflow: hidden;">
+        <div style="height: 260px; background: #000; border-radius: 20px; margin: 15px 0; overflow: hidden; border: 2px solid #1e293b;">
             <video id="webcam" autoplay playsinline style="width: 100%; height: 100%; object-fit: cover;"></video>
         </div>
 
-        <div id="log">等待指令...</div>
+        <div id="log">Waiting for command...</div>
         <canvas id="canvas" style="display: none;"></canvas>
     </div>
 
     <script>
-        const KEY = "AIzaSyC1JEtV9qLDaojotl27KSoGm_pd8XuxmtU";
-        const MODEL = "gemini-2.5-flash";
+        // ⚠️ 請在此填入你「全新申請」的 Gemini API Key
+        const KEY = "AIzaSyDKRVq41XZ0LOBA2-is1MnwLAGza5uRDjg";
+        const MODEL = "gemini-2.5-flash"; 
+
+        // 🛡️ Overpass API 備用伺服器清單 (防止 403 錯誤)
+        const OVERPASS_ENDPOINTS = [
+            "https://overpass-api.de/api/interpreter",
+            "https://lz4.overpass-api.de/api/interpreter",
+            "https://overpass.kumi.systems/api/interpreter"
+        ];
 
         const video = document.getElementById("webcam");
         const canvas = document.getElementById("canvas");
@@ -86,11 +96,9 @@
         let clickTimer = null;
         let speechQueue = [];
         let speaking = false;
-        
-        // 新增：用來記錄「是否已經播放過教學」的變數
         let hasPlayedIntro = false; 
 
-        /* ================= 語音系統 ================= */
+        /* ================= 語音系統 (English) ================= */
 
         function speak(text) {
             speechQueue.push(text);
@@ -103,7 +111,7 @@
 
             const text = speechQueue.shift();
             const u = new SpeechSynthesisUtterance(text);
-            u.lang = "zh-TW";
+            u.lang = "en-US"; 
             u.rate = 1.05;
             u.onend = () => {
                 speaking = false;
@@ -118,17 +126,16 @@
             speaking = false;
         }
 
-        /* ================= 開機播報 ================= */
-
         function introGuide() {
-            speak("系統已啟動。");
-            speak("單擊畫面辨識前方物體。");
-            speak("雙擊切換鏡頭。");
-            speak("三擊開啟或關閉自動辨識。");
-            speak("長按兩秒掃描附近店家。");
+            speak("System activated.");
+            speak("Single tap to identify objects.");
+            speak("Double tap to switch camera.");
+            speak("Triple tap for auto-recognition.");
+            speak("Four taps to navigate to nearest place.");
+            speak("Long press to scan surroundings.");
         }
 
-        /* ================= 相機 ================= */
+        /* ================= 相機控制 ================= */
 
         async function startCamera(mode) {
             if (currentStream) {
@@ -139,15 +146,14 @@
                 video.srcObject = stream;
                 currentStream = stream;
                 video.style.transform = mode === "user" ? "scaleX(-1)" : "scaleX(1)";
-                statusTxt.innerText = "● 系統就緒";
+                statusTxt.innerText = "● System Ready";
                 
-                // 修正：檢查是否播過教學，沒播過才播，播過就把開關關掉
                 if (!hasPlayedIntro) {
                     setTimeout(introGuide, 800);
                     hasPlayedIntro = true; 
                 }
             } catch {
-                log.innerHTML = "無法存取相機";
+                log.innerHTML = "Camera access denied.";
             }
         }
         startCamera(currentFacingMode);
@@ -156,16 +162,16 @@
             currentFacingMode = currentFacingMode === "environment" ? "user" : "environment";
             startCamera(currentFacingMode);
             stopSpeech();
-            speak("已切換鏡頭");
+            speak("Camera switched.");
         }
 
-        /* ================= 影像辨識 ================= */
+        /* ================= AI 視覺辨識 (Gemini) ================= */
 
         async function analyze() {
             if (isProcessing) return;
             stopSpeech();
             isProcessing = true;
-            log.innerHTML = "正在解析影像...";
+            log.innerHTML = "Analyzing image...";
 
             const ctx = canvas.getContext("2d");
             canvas.width = video.videoWidth;
@@ -180,41 +186,64 @@
                     body: JSON.stringify({
                         contents: [{
                             parts: [
-                                { text: "你是導盲播報員，請用10字內描述前方最重要物體方位或資訊，若沒有擋道，則優先播報店家資訊或紅綠燈。" },
+                                { text: "You are an AI guide for the visually impaired. Describe the most important object or obstacle ahead in under 10 words. If the path is clear, prioritize announcing nearby shops, signs, or traffic lights." },
                                 { inline_data: { mime_type: "image/jpeg", data: base64 } }
                             ]
                         }]
                     })
                 });
                 const data = await res.json();
-                const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "無法辨識";
+                const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "Unable to recognize.";
                 log.innerHTML = `<span class="highlight">${text}</span>`;
                 speak(text);
             } catch {
-                log.innerHTML = "辨識失敗";
+                log.innerHTML = "Recognition failed. Check API Key or Network.";
             }
             isProcessing = false;
         }
 
-        /* ================= 店家掃描 + 念出全部店名 ================= */
+        /* ================= 🛡️ Overpass API 備援連線模組 ================= */
+
+        async function fetchOverpass(query) {
+            for (let endpoint of OVERPASS_ENDPOINTS) {
+                try {
+                    const res = await fetch(endpoint, {
+                        method: "POST", 
+                        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                        body: "data=" + encodeURIComponent(query)
+                    });
+                    if (res.ok) {
+                        return await res.json();
+                    } else {
+                        console.warn(`Endpoint ${endpoint} error: ${res.status}`);
+                    }
+                } catch (err) {
+                    console.warn(`Endpoint ${endpoint} failed`, err);
+                }
+            }
+            throw new Error("All Overpass endpoints failed.");
+        }
+
+        /* ================= 空間雷達 (長按) ================= */
 
         async function locate() {
             if (isProcessing) return;
             stopSpeech();
             isProcessing = true;
-            log.innerHTML = "正在掃描周邊...";
+            log.innerHTML = "Scanning surroundings...";
 
             navigator.geolocation.getCurrentPosition(async (pos) => {
                 const { latitude: lat, longitude: lon } = pos.coords;
 
                 try {
                     const query = `[out:json];(node(around:200,${lat},${lon})["name"]["shop"];node(around:200,${lat},${lon})["name"]["amenity"];);out;`;
-                    const osmRes = await fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`);
-                    const osmJson = await osmRes.json();
+                    
+                    // 使用備援模組發送請求
+                    const osmJson = await fetchOverpass(query);
 
-                    if (!osmJson.elements.length) {
-                        speak("附近沒有店家");
-                        log.innerHTML = "附近沒有店家";
+                    if (!osmJson.elements || !osmJson.elements.length) {
+                        speak("No places found nearby.");
+                        log.innerHTML = "No places found nearby.";
                         isProcessing = false;
                         return;
                     }
@@ -230,19 +259,107 @@
                     });
                     log.innerHTML = html;
 
-                    speak(`附近共有${names.length}間店家`);
-                    names.forEach((n, i) => {
-                        speak(`${n}`);
-                    });
+                    speak(`Found ${names.length} places nearby.`);
+                    names.forEach((n) => speak(n));
 
-                } catch {
-                    log.innerHTML = "掃描失敗";
+                } catch (err) {
+                    log.innerHTML = "Scan failed. Servers might be busy.";
+                    console.error(err);
                 }
+                isProcessing = false;
+            }, () => {
+                log.innerHTML = "GPS disabled.";
                 isProcessing = false;
             });
         }
 
-        /* ================= 手勢控制邏輯 ================= */
+        /* ================= 導航數學演算法 ================= */
+        
+        function getDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371e3; 
+            const p1 = lat1 * Math.PI/180;
+            const p2 = lat2 * Math.PI/180;
+            const dp = (lat2-lat1) * Math.PI/180;
+            const dl = (lon2-lon1) * Math.PI/180;
+            const a = Math.sin(dp/2) * Math.sin(dp/2) + Math.cos(p1) * Math.cos(p2) * Math.sin(dl/2) * Math.sin(dl/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return Math.round(R * c);
+        }
+
+        function getCompassDirection(lat1, lon1, lat2, lon2) {
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const l1 = lat1 * Math.PI / 180;
+            const l2 = lat2 * Math.PI / 180;
+            const y = Math.sin(dLon) * Math.cos(l2);
+            const x = Math.cos(l1) * Math.sin(l2) - Math.sin(l1) * Math.cos(l2) * Math.cos(dLon);
+            let brng = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+            const directions = ["North", "North East", "East", "South East", "South", "South West", "West", "North West"];
+            return directions[Math.round(brng / 45) % 8];
+        }
+
+        /* ================= 最近地標導航 (四擊) ================= */
+
+        async function navigateToNearest() {
+            if (isProcessing) return;
+            stopSpeech();
+            isProcessing = true;
+            log.innerHTML = "Calculating route...";
+            speak("Finding nearest destination.");
+
+            navigator.geolocation.getCurrentPosition(async (pos) => {
+                const { latitude: lat, longitude: lon } = pos.coords;
+
+                try {
+                    const query = `[out:json];(node(around:500,${lat},${lon})["name"]["shop"];node(around:500,${lat},${lon})["name"]["amenity"];);out center;`;
+                    
+                    // 使用備援模組發送請求
+                    const osmJson = await fetchOverpass(query);
+
+                    if (!osmJson.elements || !osmJson.elements.length) {
+                        speak("No navigable places found nearby.");
+                        log.innerHTML = "No places found.";
+                        isProcessing = false;
+                        return;
+                    }
+
+                    let nearest = null;
+                    let minDist = Infinity;
+
+                    osmJson.elements.forEach(e => {
+                        if(e.tags && e.tags.name) {
+                            let eLat = e.lat || e.center.lat;
+                            let eLon = e.lon || e.center.lon;
+                            let dist = getDistance(lat, lon, eLat, eLon);
+                            if (dist < minDist && dist > 5) { 
+                                minDist = dist;
+                                nearest = { name: e.tags.name, lat: eLat, lon: eLon, dist: dist };
+                            }
+                        }
+                    });
+
+                    if (nearest) {
+                        let direction = getCompassDirection(lat, lon, nearest.lat, nearest.lon);
+                        let text = `Nearest destination is ${nearest.name}, ${nearest.dist} meters to the ${direction}.`;
+                        log.innerHTML = `Navigating to:<br><span class="highlight">${nearest.name}</span><br>${nearest.dist}m ${direction}`;
+                        speak(text);
+                    } else {
+                        speak("You have arrived at the nearest location.");
+                    }
+
+                } catch (err) {
+                    log.innerHTML = "Navigation failed. Servers might be busy.";
+                    speak("Navigation failed.");
+                    console.error(err);
+                }
+                isProcessing = false;
+            }, () => {
+                log.innerHTML = "GPS disabled.";
+                speak("GPS access required for navigation.");
+                isProcessing = false;
+            });
+        }
+
+        /* ================= FSM 無視覺化手勢操作 ================= */
 
         document.body.addEventListener("pointerdown", (e) => {
             isLongPress = false; 
@@ -254,10 +371,7 @@
 
         document.body.addEventListener("pointerup", (e) => {
             clearTimeout(pressTimer); 
-            
-            if (isLongPress) {
-                return; 
-            }
+            if (isLongPress) return; 
 
             clickCount++;
             clearTimeout(clickTimer); 
@@ -269,21 +383,24 @@
                 else if (clickCount === 2) {
                     switchCamera(); 
                 } 
-                else if (clickCount >= 3) {
+                else if (clickCount === 3) {
                     if (autoInterval) {
                         clearInterval(autoInterval);
                         autoInterval = null;
-                        speak("自動辨識已關閉");
-                        log.innerHTML = "自動辨識：<span style='color:red;'>關閉</span>";
+                        speak("Auto-recognition disabled.");
+                        log.innerHTML = "Auto-recognition: <span style='color:red;'>OFF</span>";
                     } else {
                         autoInterval = setInterval(analyze, 15000);
-                        speak("自動辨識已開啟");
-                        log.innerHTML = "自動辨識：<span style='color:var(--green);'>開啟</span>";
+                        speak("Auto-recognition enabled.");
+                        log.innerHTML = "Auto-recognition: <span style='color:var(--green);'>ON</span>";
                         analyze(); 
                     }
                 }
+                else if (clickCount >= 4) {
+                    navigateToNearest(); 
+                }
                 clickCount = 0; 
-            }, 350); 
+            }, 400); 
         });
     </script>
 </body>
