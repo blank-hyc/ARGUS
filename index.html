@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ARGUS-VisionEcho (Robofest Edition)</title>
+    <title>ARGUS-VisionEcho (V4.6 Live Tracking - EN)</title>
 
     <style>
         :root { 
@@ -11,6 +11,7 @@
             --card: #0f172a; 
             --accent: #38bdf8; 
             --green: #10b981; 
+            --warn: #fbbf24;
         }
         body {
             font-family: system-ui, -apple-system, sans-serif;
@@ -45,24 +46,21 @@
             font-size: 1.1rem;
             line-height: 1.5;
         }
-        .highlight { 
-            color: var(--accent); 
-            font-weight: bold; 
-        }
-        .shop-item { 
-            padding: 6px 0; 
-            border-bottom: 1px solid #1e293b; 
-        }
+        .highlight { color: var(--accent); font-weight: bold; }
+        .nav-dir { color: var(--warn); font-size: 1.4rem; font-weight: 800; display: block; margin-top: 5px; }
+        .blinking { animation: blink 1.5s infinite; }
+        @keyframes blink { 50% { opacity: 0.5; } }
     </style>
 </head>
 
 <body>
     <div class="card">
-        <h2>ARGUS</h2>
-        <div id="statusTxt">System initializing...</div>
+        <h2>ARGUS <small style="font-size: 0.6em; opacity: 0.6;"></small></h2>
+        <div id="statusTxt">Initializing...</div>
 
-        <div style="height: 260px; background: #000; border-radius: 20px; margin: 15px 0; overflow: hidden; border: 2px solid #1e293b;">
+        <div style="height: 260px; background: #000; border-radius: 20px; margin: 15px 0; overflow: hidden; border: 2px solid #1e293b; position: relative;">
             <video id="webcam" autoplay playsinline style="width: 100%; height: 100%; object-fit: cover;"></video>
+            <div id="compassDebug" style="position: absolute; bottom: 5px; right: 10px; font-size: 10px; color: #fff5;">Heading: --°</div>
         </div>
 
         <div id="log">Waiting for command...</div>
@@ -70,337 +68,280 @@
     </div>
 
     <script>
-        // ⚠️ 請在此填入你「全新申請」的 Gemini API Key
         const KEY = "AIzaSyDKRVq41XZ0LOBA2-is1MnwLAGza5uRDjg";
         const MODEL = "gemini-2.5-flash"; 
-
-        // 🛡️ Overpass API 備用伺服器清單 (防止 403 錯誤)
-        const OVERPASS_ENDPOINTS = [
-            "https://overpass-api.de/api/interpreter",
-            "https://lz4.overpass-api.de/api/interpreter",
-            "https://overpass.kumi.systems/api/interpreter"
-        ];
+        const OVERPASS_ENDPOINTS = ["https://overpass-api.de/api/interpreter", "https://lz4.overpass-api.de/api/interpreter"];
 
         const video = document.getElementById("webcam");
         const canvas = document.getElementById("canvas");
         const log = document.getElementById("log");
         const statusTxt = document.getElementById("statusTxt");
 
+        let currentStream = null; 
         let currentFacingMode = "environment";
-        let currentStream = null;
-        let autoInterval = null;
-        let pressTimer;
-        let isLongPress = false;
         let isProcessing = false;
         let clickCount = 0;
         let clickTimer = null;
+        let pressTimer;
+        let isLongPress = false;
+        let autoInterval = null;
+        let hasPlayedIntro = false;
+
+        // --- Navigation and Compass Variables ---
+        let userHeading = 0; 
+        let isListening = false;
+        let currentTranscript = "";
+        
+        // --- Live Tracking State Variables ---
+        let isNavigating = false;
+        let navWatchId = null;
+        let navTarget = null;
+        let lastSpeakTime = 0; 
+
+        /* ================= Compass Initialization ================= */
+        function initCompass() {
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                DeviceOrientationEvent.requestPermission().then(response => {
+                    if (response == 'granted') window.addEventListener('deviceorientation', handleOrientation, true);
+                });
+            } else {
+                window.addEventListener('deviceorientation', handleOrientation, true);
+            }
+        }
+        function handleOrientation(event) {
+            let heading = event.webkitCompassHeading || (360 - event.alpha);
+            if (heading) {
+                userHeading = heading;
+                document.getElementById("compassDebug").innerText = `Heading: ${Math.round(userHeading)}°`;
+            }
+        }
+
+        /* ================= Voice System (TTS) ================= */
         let speechQueue = [];
         let speaking = false;
-        let hasPlayedIntro = false; 
-
-        /* ================= 語音系統 (English) ================= */
-
-        function speak(text) {
-            speechQueue.push(text);
-            processSpeech();
+        function speak(text, lang = "en-US") {
+            speechQueue.push({ text, lang });
+            if (!speaking) processSpeech();
         }
-
         function processSpeech() {
-            if (speaking || speechQueue.length === 0) return;
+            if (speechQueue.length === 0) { speaking = false; return; }
             speaking = true;
-
-            const text = speechQueue.shift();
-            const u = new SpeechSynthesisUtterance(text);
-            u.lang = "en-US"; 
-            u.rate = 1.05;
-            u.onend = () => {
-                speaking = false;
-                processSpeech();
-            };
+            const item = speechQueue.shift();
+            const u = new SpeechSynthesisUtterance(item.text);
+            u.lang = item.lang;
+            u.onend = () => processSpeech();
             window.speechSynthesis.speak(u);
         }
+        function stopSpeech() { window.speechSynthesis.cancel(); speechQueue = []; speaking = false; }
 
-        function stopSpeech() {
-            window.speechSynthesis.cancel();
-            speechQueue = [];
-            speaking = false;
+        /* ================= Math Algorithms ================= */
+        function getBearing(lat1, lon1, lat2, lon2) {
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const l1 = lat1 * Math.PI / 180, l2 = lat2 * Math.PI / 180;
+            const y = Math.sin(dLon) * Math.cos(l2);
+            const x = Math.cos(l1) * Math.sin(l2) - Math.sin(l1) * Math.cos(l2) * Math.cos(dLon);
+            return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
         }
 
-        function introGuide() {
-            speak("System activated.");
-            speak("Single tap to identify objects.");
-            speak("Double tap to switch camera.");
-            speak("Triple tap for auto-recognition.");
-            speak("Four taps to navigate to nearest place.");
-            speak("Long press to scan surroundings.");
+        function getRelativeInstruction(targetBearing) {
+            let relativeAngle = (targetBearing - userHeading + 360) % 360;
+            if (relativeAngle <= 30 || relativeAngle > 330) return { word: "go straight ahead", icon: "⬆️" };
+            if (relativeAngle > 30 && relativeAngle <= 150) return { word: "turn right", icon: "➡️" };
+            if (relativeAngle > 150 && relativeAngle <= 210) return { word: "turn around", icon: "⬇️" };
+            if (relativeAngle > 210 && relativeAngle <= 330) return { word: "turn left", icon: "⬅️" };
+            return { word: "go straight ahead", icon: "⬆️" };
         }
 
-        /* ================= 相機控制 ================= */
+        function getDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371e3;
+            const p1 = lat1 * Math.PI/180, p2 = lat2 * Math.PI/180;
+            const dp = (lat2-lat1) * Math.PI/180, dl = (lon2-lon1) * Math.PI/180;
+            const a = Math.sin(dp/2)**2 + Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;
+            return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
+        }
+
+        /* ================= 🎤 Voice Input Logic ================= */
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const recognition = SpeechRecognition ? new SpeechRecognition() : null;
+        if (recognition) { recognition.lang = 'en-US'; recognition.continuous = true; recognition.interimResults = true; }
+
+        async function startVoiceNavigation() {
+            initCompass(); 
+            stopSpeech();
+            isListening = true; currentTranscript = "";
+            speak("Please say your destination, then tap five times to confirm.", "en-US");
+            log.innerHTML = "Listening... (Tap 5 times when done)";
+            recognition.onresult = (e) => {
+                let text = Array.from(e.results).map(r => r[0].transcript).join('');
+                currentTranscript = text;
+                log.innerHTML = `Destination: <span class="highlight">${text}</span><br>(Tap 5 times to navigate)`;
+            };
+            recognition.start();
+        }
+
+        async function executeVoiceNavigation() {
+            isListening = false; recognition.stop();
+            if (!currentTranscript.trim()) { speak("Canceled.", "en-US"); return; }
+            speak(`Searching for ${currentTranscript}`, "en-US");
+            searchDestination(currentTranscript);
+        }
+
+        /* ================= 🟢 Navigation Core: Search & Live Tracking ================= */
+        async function searchDestination(targetName = null) {
+            isProcessing = true;
+            navigator.geolocation.getCurrentPosition(async (pos) => {
+                const { latitude: lat, longitude: lon } = pos.coords;
+                try {
+                    let query = targetName 
+                        ? `[out:json];(node(around:2000,${lat},${lon})["name"~"${targetName}",i];way(around:2000,${lat},${lon})["name"~"${targetName}",i];);out center;`
+                        : `[out:json];(node(around:500,${lat},${lon})["name"]["shop"];node(around:500,${lat},${lon})["name"]["amenity"];);out center;`;
+                    
+                    const res = await fetch(OVERPASS_ENDPOINTS[0], { method: "POST", body: "data=" + encodeURIComponent(query) });
+                    const data = await res.json();
+
+                    if (!data.elements.length) { speak("Destination not found nearby.", "en-US"); isProcessing = false; return; }
+
+                    navTarget = data.elements.map(e => ({
+                        name: e.tags.name,
+                        lat: e.lat || e.center.lat,
+                        lon: e.lon || e.center.lon,
+                        dist: getDistance(lat, lon, e.lat || e.center.lat, e.lon || e.center.lon)
+                    })).sort((a, b) => a.dist - b.dist)[0];
+
+                    startLiveTracking(); 
+
+                } catch (e) { log.innerHTML = "Network error"; speak("Search failed.", "en-US"); }
+                isProcessing = false;
+            });
+        }
+
+        function startLiveTracking() {
+            isNavigating = true;
+            speak(`Starting navigation to ${navTarget.name}`, "en-US");
+            lastSpeakTime = Date.now(); 
+
+            navWatchId = navigator.geolocation.watchPosition((pos) => {
+                const { latitude: lat, longitude: lon } = pos.coords;
+                let dist = getDistance(lat, lon, navTarget.lat, navTarget.lon);
+                let bearing = getBearing(lat, lon, navTarget.lat, navTarget.lon);
+                let navInfo = getRelativeInstruction(bearing);
+
+                log.innerHTML = `<span class="blinking" style="color:var(--green)">● Navigating</span><br>Target: <span class="highlight">${navTarget.name}</span><br>Remaining: ${dist}m<span class="nav-dir">${navInfo.icon} ${navInfo.word.toUpperCase()}</span><br><small>(Tap 5 times to cancel)</small>`;
+
+                if (dist <= 15) {
+                    speak(`You have arrived near ${navTarget.name}. Navigation ended.`, "en-US");
+                    stopNavigation();
+                } else {
+                    let now = Date.now();
+                    // Announce direction every 15 seconds to avoid audio clutter
+                    if (now - lastSpeakTime > 15000) {
+                        speak(`Please ${navInfo.word}. About ${dist} meters left.`, "en-US");
+                        lastSpeakTime = now;
+                    }
+                }
+            }, (err) => {
+                console.warn("GPS Tracking Error");
+            }, { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 });
+        }
+
+        function stopNavigation() {
+            if (navWatchId) navigator.geolocation.clearWatch(navWatchId);
+            isNavigating = false;
+            navTarget = null;
+            log.innerHTML = "Navigation ended or canceled. Waiting for command...";
+        }
+
+        /* ================= Visual Analysis & Camera ================= */
+        async function analyze() {
+            if (isProcessing) return; stopSpeech(); isProcessing = true;
+            log.innerHTML = "Analyzing...";
+            const ctx = canvas.getContext("2d"); canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0); const b64 = canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
+            try {
+                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${KEY}`, {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ contents: [{ parts: [{ text: "Describe objects ahead for visually impaired in 10 words in English." }, { inline_data: { mime_type: "image/jpeg", data: b64 } }] }] })
+                });
+                const d = await res.json(); const t = d.candidates[0].content.parts[0].text;
+                log.innerHTML = `<span class="highlight">${t}</span>`; speak(t, "en-US");
+            } catch (e) { log.innerHTML = "Analysis failed."; }
+            isProcessing = false;
+        }
 
         async function startCamera(mode) {
-            if (currentStream) {
-                currentStream.getTracks().forEach(t => t.stop());
-            }
+            if (currentStream) currentStream.getTracks().forEach(t => t.stop());
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode } });
-                video.srcObject = stream;
-                currentStream = stream;
-                video.style.transform = mode === "user" ? "scaleX(-1)" : "scaleX(1)";
-                statusTxt.innerText = "● System Ready";
-                
-                if (!hasPlayedIntro) {
-                    setTimeout(introGuide, 800);
-                    hasPlayedIntro = true; 
-                }
-            } catch {
-                log.innerHTML = "Camera access denied.";
+                const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode } });
+                video.srcObject = s; currentStream = s; statusTxt.innerText = "● System Ready";
+            } catch (err) {
+                log.innerHTML = "Camera access failed.";
             }
         }
         startCamera(currentFacingMode);
 
-        function switchCamera() {
-            currentFacingMode = currentFacingMode === "environment" ? "user" : "environment";
-            startCamera(currentFacingMode);
-            stopSpeech();
-            speak("Camera switched.");
-        }
-
-        /* ================= AI 視覺辨識 (Gemini) ================= */
-
-        async function analyze() {
-            if (isProcessing) return;
-            stopSpeech();
-            isProcessing = true;
-            log.innerHTML = "Analyzing image...";
-
-            const ctx = canvas.getContext("2d");
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            ctx.drawImage(video, 0, 0);
-            const base64 = canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
-
-            try {
-                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${KEY}`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        contents: [{
-                            parts: [
-                                { text: "You are an AI guide for the visually impaired. Describe the most important object or obstacle ahead in under 10 words. If the path is clear, prioritize announcing nearby shops, signs, or traffic lights." },
-                                { inline_data: { mime_type: "image/jpeg", data: base64 } }
-                            ]
-                        }]
-                    })
-                });
-                const data = await res.json();
-                const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "Unable to recognize.";
-                log.innerHTML = `<span class="highlight">${text}</span>`;
-                speak(text);
-            } catch {
-                log.innerHTML = "Recognition failed. Check API Key or Network.";
-            }
-            isProcessing = false;
-        }
-
-        /* ================= 🛡️ Overpass API 備援連線模組 ================= */
-
-        async function fetchOverpass(query) {
-            for (let endpoint of OVERPASS_ENDPOINTS) {
-                try {
-                    const res = await fetch(endpoint, {
-                        method: "POST", 
-                        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-                        body: "data=" + encodeURIComponent(query)
-                    });
-                    if (res.ok) {
-                        return await res.json();
-                    } else {
-                        console.warn(`Endpoint ${endpoint} error: ${res.status}`);
-                    }
-                } catch (err) {
-                    console.warn(`Endpoint ${endpoint} failed`, err);
-                }
-            }
-            throw new Error("All Overpass endpoints failed.");
-        }
-
-        /* ================= 空間雷達 (長按) ================= */
-
-        async function locate() {
-            if (isProcessing) return;
-            stopSpeech();
-            isProcessing = true;
-            log.innerHTML = "Scanning surroundings...";
-
-            navigator.geolocation.getCurrentPosition(async (pos) => {
-                const { latitude: lat, longitude: lon } = pos.coords;
-
-                try {
-                    const query = `[out:json];(node(around:200,${lat},${lon})["name"]["shop"];node(around:200,${lat},${lon})["name"]["amenity"];);out;`;
-                    
-                    // 使用備援模組發送請求
-                    const osmJson = await fetchOverpass(query);
-
-                    if (!osmJson.elements || !osmJson.elements.length) {
-                        speak("No places found nearby.");
-                        log.innerHTML = "No places found nearby.";
-                        isProcessing = false;
-                        return;
-                    }
-
-                    let names = [];
-                    let html = "";
-                    osmJson.elements.forEach(e => {
-                        const name = e.tags.name;
-                        if (name && !names.includes(name)) {
-                            names.push(name);
-                            html += `<div class="shop-item">${name}</div>`;
-                        }
-                    });
-                    log.innerHTML = html;
-
-                    speak(`Found ${names.length} places nearby.`);
-                    names.forEach((n) => speak(n));
-
-                } catch (err) {
-                    log.innerHTML = "Scan failed. Servers might be busy.";
-                    console.error(err);
-                }
-                isProcessing = false;
-            }, () => {
-                log.innerHTML = "GPS disabled.";
-                isProcessing = false;
-            });
-        }
-
-        /* ================= 導航數學演算法 ================= */
-        
-        function getDistance(lat1, lon1, lat2, lon2) {
-            const R = 6371e3; 
-            const p1 = lat1 * Math.PI/180;
-            const p2 = lat2 * Math.PI/180;
-            const dp = (lat2-lat1) * Math.PI/180;
-            const dl = (lon2-lon1) * Math.PI/180;
-            const a = Math.sin(dp/2) * Math.sin(dp/2) + Math.cos(p1) * Math.cos(p2) * Math.sin(dl/2) * Math.sin(dl/2);
-            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-            return Math.round(R * c);
-        }
-
-        function getCompassDirection(lat1, lon1, lat2, lon2) {
-            const dLon = (lon2 - lon1) * Math.PI / 180;
-            const l1 = lat1 * Math.PI / 180;
-            const l2 = lat2 * Math.PI / 180;
-            const y = Math.sin(dLon) * Math.cos(l2);
-            const x = Math.cos(l1) * Math.sin(l2) - Math.sin(l1) * Math.cos(l2) * Math.cos(dLon);
-            let brng = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
-            const directions = ["North", "North East", "East", "South East", "South", "South West", "West", "North West"];
-            return directions[Math.round(brng / 45) % 8];
-        }
-
-        /* ================= 最近地標導航 (四擊) ================= */
-
-        async function navigateToNearest() {
-            if (isProcessing) return;
-            stopSpeech();
-            isProcessing = true;
-            log.innerHTML = "Calculating route...";
-            speak("Finding nearest destination.");
-
-            navigator.geolocation.getCurrentPosition(async (pos) => {
-                const { latitude: lat, longitude: lon } = pos.coords;
-
-                try {
-                    const query = `[out:json];(node(around:500,${lat},${lon})["name"]["shop"];node(around:500,${lat},${lon})["name"]["amenity"];);out center;`;
-                    
-                    // 使用備援模組發送請求
-                    const osmJson = await fetchOverpass(query);
-
-                    if (!osmJson.elements || !osmJson.elements.length) {
-                        speak("No navigable places found nearby.");
-                        log.innerHTML = "No places found.";
-                        isProcessing = false;
-                        return;
-                    }
-
-                    let nearest = null;
-                    let minDist = Infinity;
-
-                    osmJson.elements.forEach(e => {
-                        if(e.tags && e.tags.name) {
-                            let eLat = e.lat || e.center.lat;
-                            let eLon = e.lon || e.center.lon;
-                            let dist = getDistance(lat, lon, eLat, eLon);
-                            if (dist < minDist && dist > 5) { 
-                                minDist = dist;
-                                nearest = { name: e.tags.name, lat: eLat, lon: eLon, dist: dist };
-                            }
-                        }
-                    });
-
-                    if (nearest) {
-                        let direction = getCompassDirection(lat, lon, nearest.lat, nearest.lon);
-                        let text = `Nearest destination is ${nearest.name}, ${nearest.dist} meters to the ${direction}.`;
-                        log.innerHTML = `Navigating to:<br><span class="highlight">${nearest.name}</span><br>${nearest.dist}m ${direction}`;
-                        speak(text);
-                    } else {
-                        speak("You have arrived at the nearest location.");
-                    }
-
-                } catch (err) {
-                    log.innerHTML = "Navigation failed. Servers might be busy.";
-                    speak("Navigation failed.");
-                    console.error(err);
-                }
-                isProcessing = false;
-            }, () => {
-                log.innerHTML = "GPS disabled.";
-                speak("GPS access required for navigation.");
-                isProcessing = false;
-            });
-        }
-
-        /* ================= FSM 無視覺化手勢操作 ================= */
-
+       /* ================= FSM Gesture Detection ================= */
         document.body.addEventListener("pointerdown", (e) => {
-            isLongPress = false; 
-            pressTimer = setTimeout(() => {
-                isLongPress = true; 
-                locate();
-            }, 1500); 
+            // 🌟 新增：第一次觸碰螢幕時，播放完整英文操作教學
+            if (!hasPlayedIntro) {
+                hasPlayedIntro = true;
+                speak("Welcome to ARGUS. Tap once to scan. Tap twice to switch camera. Tap three times for auto-scan. Tap four times for nearby landmarks. Tap five times for voice navigation.", "en-US");
+                return; // 第一次點擊只播報說明，不觸發其他功能
+            }
+
+            if (isListening) return;
+            isLongPress = false;
+            pressTimer = setTimeout(() => { isLongPress = true; speak("Scanning environment.", "en-US"); }, 1000);
         });
 
         document.body.addEventListener("pointerup", (e) => {
-            clearTimeout(pressTimer); 
-            if (isLongPress) return; 
+            if (!isListening) clearTimeout(pressTimer);
+            if (isLongPress) return;
 
             clickCount++;
-            clearTimeout(clickTimer); 
-
+            clearTimeout(clickTimer);
             clickTimer = setTimeout(() => {
-                if (clickCount === 1) {
-                    analyze(); 
-                } 
-                else if (clickCount === 2) {
-                    switchCamera(); 
-                } 
-                else if (clickCount === 3) {
-                    if (autoInterval) {
-                        clearInterval(autoInterval);
-                        autoInterval = null;
-                        speak("Auto-recognition disabled.");
-                        log.innerHTML = "Auto-recognition: <span style='color:red;'>OFF</span>";
-                    } else {
-                        autoInterval = setInterval(analyze, 15000);
-                        speak("Auto-recognition enabled.");
-                        log.innerHTML = "Auto-recognition: <span style='color:var(--green);'>ON</span>";
-                        analyze(); 
+                if (isListening) {
+                    // Tap 5 times to confirm voice input
+                    if (clickCount >= 5) executeVoiceNavigation(); 
+                } else if (isNavigating) {
+                    if (clickCount >= 5) {
+                        // Cancel navigation
+                        stopNavigation();
+                        speak("Navigation manually canceled.", "en-US");
+                    } else if (clickCount === 1) {
+                        // Force distance update during navigation
+                        if (navTarget) {
+                            speak("Updating.", "en-US"); 
+                            lastSpeakTime = 0; 
+                        }
                     }
+                } else {
+                    // Normal idle state
+                    if (clickCount === 1) analyze();
+                    else if (clickCount === 2) { 
+                        currentFacingMode = currentFacingMode === "environment" ? "user" : "environment"; 
+                        startCamera(currentFacingMode); 
+                        speak("Camera switched.", "en-US"); 
+                    }
+                    else if (clickCount === 3) { 
+                        // Toggle auto-analysis
+                        if (autoInterval) {
+                            clearInterval(autoInterval);
+                            autoInterval = null;
+                            speak("Auto-analysis disabled.", "en-US");
+                            log.innerHTML = "Auto-analysis: <span style='color:red;'>OFF</span>";
+                        } else {
+                            autoInterval = setInterval(analyze, 15000);
+                            speak("Auto-analysis enabled.", "en-US");
+                            log.innerHTML = "Auto-analysis: <span style='color:var(--green);'>ON</span>";
+                            analyze(); 
+                        }
+                    }
+                    else if (clickCount === 4) searchDestination(); 
+                    else if (clickCount >= 5) startVoiceNavigation(); 
                 }
-                else if (clickCount >= 4) {
-                    navigateToNearest(); 
-                }
-                clickCount = 0; 
-            }, 400); 
+                clickCount = 0;
+            }, 450);
         });
     </script>
 </body>
