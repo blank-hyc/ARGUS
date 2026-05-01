@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ARGUS-VisionEcho (V4.6 Live Tracking - EN)</title>
+    <title>ARGUS-VisionEcho V4.8 (Full Integration)</title>
 
     <style>
         :root { 
@@ -55,8 +55,8 @@
 
 <body>
     <div class="card">
-        <h2>ARGUS <small style="font-size: 0.6em; opacity: 0.6;"></small></h2>
-        <div id="statusTxt">Initializing...</div>
+        <h2>ARGUS <small style="font-size: 0.6em; opacity: 0.6;">V4.8</small></h2>
+        <div id="statusTxt">Tap anywhere to start...</div>
 
         <div style="height: 260px; background: #000; border-radius: 20px; margin: 15px 0; overflow: hidden; border: 2px solid #1e293b; position: relative;">
             <video id="webcam" autoplay playsinline style="width: 100%; height: 100%; object-fit: cover;"></video>
@@ -68,7 +68,7 @@
     </div>
 
     <script>
-        const KEY = "AIzaSyAEpAv33dgqeg6Uw5JKMtcnvoF89_EHsD8";
+        const KEY = "AIzaSyCbXQjFKiq5emmeJugzayHbV4sVVKMeX68";
         const MODEL = "gemini-2.5-flash"; 
         const OVERPASS_ENDPOINTS = ["https://overpass-api.de/api/interpreter", "https://lz4.overpass-api.de/api/interpreter"];
 
@@ -82,41 +82,33 @@
         let isProcessing = false;
         let clickCount = 0;
         let clickTimer = null;
-        let pressTimer;
-        let isLongPress = false;
         let autoInterval = null;
         let hasPlayedIntro = false;
 
-        // --- Navigation and Compass Variables ---
+        // 長按計時
+        let timer1s, timer3s, timer5s;
+        let longPressLevel = 0; 
+
+        // 導航與位置
         let userHeading = 0; 
         let isListening = false;
         let currentTranscript = "";
-        
-        // --- Live Tracking State Variables ---
         let isNavigating = false;
         let navWatchId = null;
         let navTarget = null;
         let lastSpeakTime = 0; 
 
-        /* ================= Compass Initialization ================= */
+        /* ================= 系統工具 (TTS, Compass) ================= */
         function initCompass() {
             if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-                DeviceOrientationEvent.requestPermission().then(response => {
-                    if (response == 'granted') window.addEventListener('deviceorientation', handleOrientation, true);
-                });
-            } else {
-                window.addEventListener('deviceorientation', handleOrientation, true);
-            }
+                DeviceOrientationEvent.requestPermission().then(res => { if (res == 'granted') window.addEventListener('deviceorientation', handleOrientation, true); });
+            } else { window.addEventListener('deviceorientation', handleOrientation, true); }
         }
-        function handleOrientation(event) {
-            let heading = event.webkitCompassHeading || (360 - event.alpha);
-            if (heading) {
-                userHeading = heading;
-                document.getElementById("compassDebug").innerText = `Heading: ${Math.round(userHeading)}°`;
-            }
+        function handleOrientation(e) {
+            let h = e.webkitCompassHeading || (360 - e.alpha);
+            if (h) { userHeading = h; document.getElementById("compassDebug").innerText = `Heading: ${Math.round(userHeading)}°`; }
         }
 
-        /* ================= Voice System (TTS) ================= */
         let speechQueue = [];
         let speaking = false;
         function speak(text, lang = "en-US") {
@@ -134,24 +126,6 @@
         }
         function stopSpeech() { window.speechSynthesis.cancel(); speechQueue = []; speaking = false; }
 
-        /* ================= Math Algorithms ================= */
-        function getBearing(lat1, lon1, lat2, lon2) {
-            const dLon = (lon2 - lon1) * Math.PI / 180;
-            const l1 = lat1 * Math.PI / 180, l2 = lat2 * Math.PI / 180;
-            const y = Math.sin(dLon) * Math.cos(l2);
-            const x = Math.cos(l1) * Math.sin(l2) - Math.sin(l1) * Math.cos(l2) * Math.cos(dLon);
-            return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
-        }
-
-        function getRelativeInstruction(targetBearing) {
-            let relativeAngle = (targetBearing - userHeading + 360) % 360;
-            if (relativeAngle <= 30 || relativeAngle > 330) return { word: "go straight ahead", icon: "⬆️" };
-            if (relativeAngle > 30 && relativeAngle <= 150) return { word: "turn right", icon: "➡️" };
-            if (relativeAngle > 150 && relativeAngle <= 210) return { word: "turn around", icon: "⬇️" };
-            if (relativeAngle > 210 && relativeAngle <= 330) return { word: "turn left", icon: "⬅️" };
-            return { word: "go straight ahead", icon: "⬆️" };
-        }
-
         function getDistance(lat1, lon1, lat2, lon2) {
             const R = 6371e3;
             const p1 = lat1 * Math.PI/180, p2 = lat2 * Math.PI/180;
@@ -160,98 +134,76 @@
             return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
         }
 
-        /* ================= 🎤 Voice Input Logic ================= */
+        /* ================= 🎤 語音辨識功能 ================= */
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         const recognition = SpeechRecognition ? new SpeechRecognition() : null;
         if (recognition) { recognition.lang = 'en-US'; recognition.continuous = true; recognition.interimResults = true; }
 
         async function startVoiceNavigation() {
-            initCompass(); 
-            stopSpeech();
+            initCompass(); stopSpeech();
             isListening = true; currentTranscript = "";
-            speak("Please say your destination, then tap five times to confirm.", "en-US");
-            log.innerHTML = "Listening... (Tap 5 times when done)";
+            speak("Please say your destination.", "en-US");
+            log.innerHTML = "Listening... (Tap 5 times to confirm)";
             recognition.onresult = (e) => {
-                let text = Array.from(e.results).map(r => r[0].transcript).join('');
-                currentTranscript = text;
-                log.innerHTML = `Destination: <span class="highlight">${text}</span><br>(Tap 5 times to navigate)`;
+                currentTranscript = Array.from(e.results).map(r => r[0].transcript).join('');
+                log.innerHTML = `Searching: <span class="highlight">${currentTranscript}</span>`;
             };
             recognition.start();
         }
 
-        async function executeVoiceNavigation() {
-            isListening = false; recognition.stop();
-            if (!currentTranscript.trim()) { speak("Canceled.", "en-US"); return; }
-            speak(`Searching for ${currentTranscript}`, "en-US");
-            searchDestination(currentTranscript);
-        }
-
-        /* ================= 🟢 Navigation Core: Search & Live Tracking ================= */
-        async function searchDestination(targetName = null) {
+        /* ================= 🟢 導航與地標搜尋 ================= */
+        async function searchPlaces(targetName = null, limit = 1) {
             isProcessing = true;
             navigator.geolocation.getCurrentPosition(async (pos) => {
                 const { latitude: lat, longitude: lon } = pos.coords;
                 try {
                     let query = targetName 
-                        ? `[out:json];(node(around:2000,${lat},${lon})["name"~"${targetName}",i];way(around:2000,${lat},${lon})["name"~"${targetName}",i];);out center;`
-                        : `[out:json];(node(around:500,${lat},${lon})["name"]["shop"];node(around:500,${lat},${lon})["name"]["amenity"];);out center;`;
+                        ? `[out:json];(node(around:3000,${lat},${lon})["name"~"${targetName}",i];way(around:3000,${lat},${lon})["name"~"${targetName}",i];);out center;`
+                        : `[out:json];(node(around:1000,${lat},${lon})["name"]["shop"];node(around:1000,${lat},${lon})["name"]["amenity"];);out center;`;
                     
                     const res = await fetch(OVERPASS_ENDPOINTS[0], { method: "POST", body: "data=" + encodeURIComponent(query) });
                     const data = await res.json();
 
-                    if (!data.elements.length) { speak("Destination not found nearby.", "en-US"); isProcessing = false; return; }
+                    if (!data.elements.length) { speak("No places found.", "en-US"); isProcessing = false; return; }
 
-                    navTarget = data.elements.map(e => ({
+                    let places = data.elements.map(e => ({
                         name: e.tags.name,
                         lat: e.lat || e.center.lat,
                         lon: e.lon || e.center.lon,
                         dist: getDistance(lat, lon, e.lat || e.center.lat, e.lon || e.center.lon)
-                    })).sort((a, b) => a.dist - b.dist)[0];
+                    })).sort((a, b) => a.dist - b.dist);
 
-                    startLiveTracking(); 
-
-                } catch (e) { log.innerHTML = "Network error"; speak("Search failed.", "en-US"); }
+                    if (limit === 1) {
+                        navTarget = places[0];
+                        startLiveTracking();
+                    } else {
+                        let top10 = places.slice(0, 10);
+                        let text = top10.map((p, i) => `${i+1}, ${p.name}, ${p.dist} meters.`).join(" ");
+                        speak("Nearby places are: " + text, "en-US");
+                        log.innerHTML = top10.map(p => `• ${p.name} (${p.dist}m)`).join("<br>");
+                    }
+                } catch (e) { speak("Error connecting to map service.", "en-US"); }
                 isProcessing = false;
             });
         }
 
         function startLiveTracking() {
             isNavigating = true;
-            speak(`Starting navigation to ${navTarget.name}`, "en-US");
-            lastSpeakTime = Date.now(); 
-
+            speak(`Navigating to ${navTarget.name}`, "en-US");
             navWatchId = navigator.geolocation.watchPosition((pos) => {
                 const { latitude: lat, longitude: lon } = pos.coords;
-                let dist = getDistance(lat, lon, navTarget.lat, navTarget.lon);
-                let bearing = getBearing(lat, lon, navTarget.lat, navTarget.lon);
-                let navInfo = getRelativeInstruction(bearing);
-
-                log.innerHTML = `<span class="blinking" style="color:var(--green)">● Navigating</span><br>Target: <span class="highlight">${navTarget.name}</span><br>Remaining: ${dist}m<span class="nav-dir">${navInfo.icon} ${navInfo.word.toUpperCase()}</span><br><small>(Tap 5 times to cancel)</small>`;
-
-                if (dist <= 15) {
-                    speak(`You have arrived near ${navTarget.name}. Navigation ended.`, "en-US");
-                    stopNavigation();
-                } else {
-                    let now = Date.now();
-                    // Announce direction every 15 seconds to avoid audio clutter
-                    if (now - lastSpeakTime > 15000) {
-                        speak(`Please ${navInfo.word}. About ${dist} meters left.`, "en-US");
-                        lastSpeakTime = now;
-                    }
-                }
-            }, (err) => {
-                console.warn("GPS Tracking Error");
-            }, { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 });
+                let d = getDistance(lat, lon, navTarget.lat, navTarget.lon);
+                log.innerHTML = `<span class="blinking" style="color:var(--green)">● Navigating</span><br>${navTarget.name}<br>${d}m away`;
+                if (d <= 15) { speak("You have arrived.", "en-US"); stopNavigation(); }
+            }, null, { enableHighAccuracy: true });
         }
 
         function stopNavigation() {
             if (navWatchId) navigator.geolocation.clearWatch(navWatchId);
-            isNavigating = false;
-            navTarget = null;
-            log.innerHTML = "Navigation ended or canceled. Waiting for command...";
+            isNavigating = false; log.innerHTML = "Navigation ended.";
         }
 
-        /* ================= Visual Analysis & Camera ================= */
+        /* ================= 📸 影像分析 ================= */
         async function analyze() {
             if (isProcessing) return; stopSpeech(); isProcessing = true;
             log.innerHTML = "Analyzing...";
@@ -260,7 +212,7 @@
             try {
                 const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${KEY}`, {
                     method: "POST", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ contents: [{ parts: [{ text: "Describe objects ahead for visually impaired in 10 words in English." }, { inline_data: { mime_type: "image/jpeg", data: b64 } }] }] })
+                    body: JSON.stringify({ contents: [{ parts: [{ text: "Describe objects ahead in 10 words for the blind." }, { inline_data: { mime_type: "image/jpeg", data: b64 } }] }] })
                 });
                 const d = await res.json(); const t = d.candidates[0].content.parts[0].text;
                 log.innerHTML = `<span class="highlight">${t}</span>`; speak(t, "en-US");
@@ -270,75 +222,76 @@
 
         async function startCamera(mode) {
             if (currentStream) currentStream.getTracks().forEach(t => t.stop());
-            try {
-                const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode } });
-                video.srcObject = s; currentStream = s; statusTxt.innerText = "● System Ready";
-            } catch (err) {
-                log.innerHTML = "Camera access failed.";
-            }
+            const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode } });
+            video.srcObject = s; currentStream = s; statusTxt.innerText = "● System Ready";
         }
         startCamera(currentFacingMode);
 
-       /* ================= FSM Gesture Detection ================= */
+        /* ================= 🧠 手勢邏輯整合 ================= */
         document.body.addEventListener("pointerdown", (e) => {
-            // 🌟 新增：第一次觸碰螢幕時，播放完整英文操作教學
             if (!hasPlayedIntro) {
                 hasPlayedIntro = true;
-                speak("Welcome to ARGUS. Tap once to scan. Tap twice to switch camera. Tap three times for auto-scan. Tap four times for nearby landmarks. Tap five times for voice navigation.", "en-US");
-                return; // 第一次點擊只播報說明，不觸發其他功能
+                window.speechSynthesis.speak(new SpeechSynthesisUtterance("")); // 解鎖音訊
+                speak("ARGUS Online. Tap once to scan.", "en-US");
+                return;
             }
 
-            if (isListening) return;
-            isLongPress = false;
-            pressTimer = setTimeout(() => { isLongPress = true; speak("Scanning environment.", "en-US"); }, 1000);
+            longPressLevel = 0;
+            timer1s = setTimeout(() => {
+                longPressLevel = 1;
+                if (isListening || isNavigating) {
+                    speak("Canceled.", "en-US");
+                    isListening = false; if (recognition) recognition.stop();
+                    stopNavigation();
+                } else {
+                    speak("Instruction: 1 tap scan. 2 taps camera. 3 taps auto-scan. 4 taps nearest place. 5 taps voice search. Hold 5 seconds for list.", "en-US");
+                }
+            }, 1000);
+
+            timer3s = setTimeout(() => {
+                longPressLevel = 2;
+                speak("Release now for instructions, or keep holding for nearby list.", "en-US");
+            }, 3000);
+
+            timer5s = setTimeout(() => {
+                longPressLevel = 3;
+                stopSpeech();
+                speak("Listing 10 nearby places...", "en-US");
+                searchPlaces(null, 10);
+            }, 5000);
         });
 
         document.body.addEventListener("pointerup", (e) => {
-            if (!isListening) clearTimeout(pressTimer);
-            if (isLongPress) return;
+            clearTimeout(timer1s); clearTimeout(timer3s); clearTimeout(timer5s);
+            if (longPressLevel > 0) return;
+            if (!hasPlayedIntro) return;
 
             clickCount++;
             clearTimeout(clickTimer);
             clickTimer = setTimeout(() => {
                 if (isListening) {
-                    // Tap 5 times to confirm voice input
-                    if (clickCount >= 5) executeVoiceNavigation(); 
+                    if (clickCount >= 5) { isListening = false; recognition.stop(); searchPlaces(currentTranscript, 1); }
+                    else { isListening = false; recognition.stop(); speak("Canceled.", "en-US"); }
                 } else if (isNavigating) {
-                    if (clickCount >= 5) {
-                        // Cancel navigation
-                        stopNavigation();
-                        speak("Navigation manually canceled.", "en-US");
-                    } else if (clickCount === 1) {
-                        // Force distance update during navigation
-                        if (navTarget) {
-                            speak("Updating.", "en-US"); 
-                            lastSpeakTime = 0; 
-                        }
-                    }
+                    if (clickCount >= 5) { stopNavigation(); speak("Canceled.", "en-US"); }
+                    else if (clickCount === 1) { speak("Updating.", "en-US"); }
                 } else {
-                    // Normal idle state
                     if (clickCount === 1) analyze();
                     else if (clickCount === 2) { 
                         currentFacingMode = currentFacingMode === "environment" ? "user" : "environment"; 
-                        startCamera(currentFacingMode); 
-                        speak("Camera switched.", "en-US"); 
+                        startCamera(currentFacingMode); speak("Camera switched.", "en-US"); 
                     }
-                    else if (clickCount === 3) { 
-                        // Toggle auto-analysis
-                        if (autoInterval) {
-                            clearInterval(autoInterval);
-                            autoInterval = null;
-                            speak("Auto-analysis disabled.", "en-US");
-                            log.innerHTML = "Auto-analysis: <span style='color:red;'>OFF</span>";
-                        } else {
-                            autoInterval = setInterval(analyze, 15000);
-                            speak("Auto-analysis enabled.", "en-US");
-                            log.innerHTML = "Auto-analysis: <span style='color:var(--green);'>ON</span>";
-                            analyze(); 
-                        }
+                    else if (clickCount === 3) {
+                        if (autoInterval) { clearInterval(autoInterval); autoInterval = null; speak("Auto scan off.", "en-US"); }
+                        else { autoInterval = setInterval(analyze, 15000); speak("Auto scan on.", "en-US"); analyze(); }
                     }
-                    else if (clickCount === 4) searchDestination(); 
-                    else if (clickCount >= 5) startVoiceNavigation(); 
+                    else if (clickCount === 4) {
+                        speak("Navigating to nearest place.", "en-US");
+                        searchPlaces(null, 1);
+                    }
+                    else if (clickCount >= 5) {
+                        startVoiceNavigation();
+                    }
                 }
                 clickCount = 0;
             }, 450);
