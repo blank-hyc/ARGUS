@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ARGUS-VisionEcho V4.8 (Full Integration)</title>
+    <title>ARGUS-VisionEcho V4.8 (完整整合版)</title>
 
     <style>
         :root { 
@@ -56,14 +56,14 @@
 <body>
     <div class="card">
         <h2>ARGUS <small style="font-size: 0.6em; opacity: 0.6;">V4.8</small></h2>
-        <div id="statusTxt">Tap anywhere to start...</div>
+        <div id="statusTxt">點擊螢幕任何地方開始...</div>
 
         <div style="height: 260px; background: #000; border-radius: 20px; margin: 15px 0; overflow: hidden; border: 2px solid #1e293b; position: relative;">
             <video id="webcam" autoplay playsinline style="width: 100%; height: 100%; object-fit: cover;"></video>
-            <div id="compassDebug" style="position: absolute; bottom: 5px; right: 10px; font-size: 10px; color: #fff5;">Heading: --°</div>
+            <div id="compassDebug" style="position: absolute; bottom: 5px; right: 10px; font-size: 10px; color: #fff5;">方位: --°</div>
         </div>
 
-        <div id="log">Waiting for command...</div>
+        <div id="log">等待指令中...</div>
         <canvas id="canvas" style="display: none;"></canvas>
     </div>
 
@@ -98,7 +98,7 @@
         let navTarget = null;
         let lastSpeakTime = 0; 
 
-        /* ================= 系統工具 (TTS, Compass) ================= */
+        /* ================= 系統工具 (TTS, 指南針) ================= */
         function initCompass() {
             if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
                 DeviceOrientationEvent.requestPermission().then(res => { if (res == 'granted') window.addEventListener('deviceorientation', handleOrientation, true); });
@@ -106,12 +106,12 @@
         }
         function handleOrientation(e) {
             let h = e.webkitCompassHeading || (360 - e.alpha);
-            if (h) { userHeading = h; document.getElementById("compassDebug").innerText = `Heading: ${Math.round(userHeading)}°`; }
+            if (h) { userHeading = h; document.getElementById("compassDebug").innerText = `方位: ${Math.round(userHeading)}°`; }
         }
 
         let speechQueue = [];
         let speaking = false;
-        function speak(text, lang = "en-US") {
+        function speak(text, lang = "zh-TW") {
             speechQueue.push({ text, lang });
             if (!speaking) processSpeech();
         }
@@ -137,16 +137,16 @@
         /* ================= 🎤 語音辨識功能 ================= */
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         const recognition = SpeechRecognition ? new SpeechRecognition() : null;
-        if (recognition) { recognition.lang = 'en-US'; recognition.continuous = true; recognition.interimResults = true; }
+        if (recognition) { recognition.lang = 'zh-TW'; recognition.continuous = true; recognition.interimResults = true; }
 
         async function startVoiceNavigation() {
             initCompass(); stopSpeech();
             isListening = true; currentTranscript = "";
-            speak("Please say your destination.", "en-US");
-            log.innerHTML = "Listening... (Tap 5 times to confirm)";
+            speak("請說出您的目的地。", "zh-TW");
+            log.innerHTML = "聆聽中... (點擊 5 次確認)";
             recognition.onresult = (e) => {
                 currentTranscript = Array.from(e.results).map(r => r[0].transcript).join('');
-                log.innerHTML = `Searching: <span class="highlight">${currentTranscript}</span>`;
+                log.innerHTML = `搜尋中: <span class="highlight">${currentTranscript}</span>`;
             };
             recognition.start();
         }
@@ -164,7 +164,7 @@
                     const res = await fetch(OVERPASS_ENDPOINTS[0], { method: "POST", body: "data=" + encodeURIComponent(query) });
                     const data = await res.json();
 
-                    if (!data.elements.length) { speak("No places found.", "en-US"); isProcessing = false; return; }
+                    if (!data.elements.length) { speak("附近找不到相關地點。", "zh-TW"); isProcessing = false; return; }
 
                     let places = data.elements.map(e => ({
                         name: e.tags.name,
@@ -178,52 +178,52 @@
                         startLiveTracking();
                     } else {
                         let top10 = places.slice(0, 10);
-                        let text = top10.map((p, i) => `${i+1}, ${p.name}, ${p.dist} meters.`).join(" ");
-                        speak("Nearby places are: " + text, "en-US");
-                        log.innerHTML = top10.map(p => `• ${p.name} (${p.dist}m)`).join("<br>");
+                        let text = top10.map((p, i) => `第${i+1}個，${p.name}，距離 ${p.dist} 公尺。`).join(" ");
+                        speak("附近的地點有：" + text, "zh-TW");
+                        log.innerHTML = top10.map(p => `• ${p.name} (${p.dist}公尺)`).join("<br>");
                     }
-                } catch (e) { speak("Error connecting to map service.", "en-US"); }
+                } catch (e) { speak("連線地圖服務發生錯誤。", "zh-TW"); }
                 isProcessing = false;
             });
         }
 
         function startLiveTracking() {
             isNavigating = true;
-            speak(`Navigating to ${navTarget.name}`, "en-US");
+            speak(`開始導航至 ${navTarget.name}`, "zh-TW");
             navWatchId = navigator.geolocation.watchPosition((pos) => {
                 const { latitude: lat, longitude: lon } = pos.coords;
                 let d = getDistance(lat, lon, navTarget.lat, navTarget.lon);
-                log.innerHTML = `<span class="blinking" style="color:var(--green)">● Navigating</span><br>${navTarget.name}<br>${d}m away`;
-                if (d <= 15) { speak("You have arrived.", "en-US"); stopNavigation(); }
+                log.innerHTML = `<span class="blinking" style="color:var(--green)">● 導航中</span><br>${navTarget.name}<br>距離 ${d} 公尺`;
+                if (d <= 15) { speak("您已抵達目的地。", "zh-TW"); stopNavigation(); }
             }, null, { enableHighAccuracy: true });
         }
 
         function stopNavigation() {
             if (navWatchId) navigator.geolocation.clearWatch(navWatchId);
-            isNavigating = false; log.innerHTML = "Navigation ended.";
+            isNavigating = false; log.innerHTML = "導航已結束。";
         }
 
         /* ================= 📸 影像分析 ================= */
         async function analyze() {
             if (isProcessing) return; stopSpeech(); isProcessing = true;
-            log.innerHTML = "Analyzing...";
+            log.innerHTML = "分析中...";
             const ctx = canvas.getContext("2d"); canvas.width = video.videoWidth; canvas.height = video.videoHeight;
             ctx.drawImage(video, 0, 0); const b64 = canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
             try {
                 const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${KEY}`, {
                     method: "POST", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ contents: [{ parts: [{ text: "Describe objects ahead in 10 words for the blind." }, { inline_data: { mime_type: "image/jpeg", data: b64 } }] }] })
+                    body: JSON.stringify({ contents: [{ parts: [{ text: "請為視障人士用 10 個字以內的繁體中文描述前方的物體。" }, { inline_data: { mime_type: "image/jpeg", data: b64 } }] }] })
                 });
                 const d = await res.json(); const t = d.candidates[0].content.parts[0].text;
-                log.innerHTML = `<span class="highlight">${t}</span>`; speak(t, "en-US");
-            } catch (e) { log.innerHTML = "Analysis failed."; }
+                log.innerHTML = `<span class="highlight">${t}</span>`; speak(t, "zh-TW");
+            } catch (e) { log.innerHTML = "分析失敗。"; }
             isProcessing = false;
         }
 
         async function startCamera(mode) {
             if (currentStream) currentStream.getTracks().forEach(t => t.stop());
             const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode } });
-            video.srcObject = s; currentStream = s; statusTxt.innerText = "● System Ready";
+            video.srcObject = s; currentStream = s; statusTxt.innerText = "● 系統已就緒";
         }
         startCamera(currentFacingMode);
 
@@ -232,7 +232,7 @@
             if (!hasPlayedIntro) {
                 hasPlayedIntro = true;
                 window.speechSynthesis.speak(new SpeechSynthesisUtterance("")); // 解鎖音訊
-                speak("ARGUS Online. Tap once to scan.", "en-US");
+                speak("ARGUS 已連線。點擊一次進行掃描。", "zh-TW");
                 return;
             }
 
@@ -240,23 +240,23 @@
             timer1s = setTimeout(() => {
                 longPressLevel = 1;
                 if (isListening || isNavigating) {
-                    speak("Canceled.", "en-US");
+                    speak("已取消。", "zh-TW");
                     isListening = false; if (recognition) recognition.stop();
                     stopNavigation();
                 } else {
-                    speak("Instruction: 1 tap scan. 2 taps camera. 3 taps auto-scan. 4 taps nearest place. 5 taps voice search. Hold 5 seconds for list.", "en-US");
+                    speak("操作說明：點擊 1 次掃描。點擊 2 次切換鏡頭。點擊 3 次自動掃描。點擊 4 次導航至最近地點。點擊 5 次語音搜尋。長按 5 秒列出附近地點。", "zh-TW");
                 }
             }, 1000);
 
             timer3s = setTimeout(() => {
                 longPressLevel = 2;
-                speak("Release now for instructions, or keep holding for nearby list.", "en-US");
+                speak("現在放開以聆聽操作說明，或繼續長按以取得附近地點列表。", "zh-TW");
             }, 3000);
 
             timer5s = setTimeout(() => {
                 longPressLevel = 3;
                 stopSpeech();
-                speak("Listing 10 nearby places...", "en-US");
+                speak("列出附近十個地點...", "zh-TW");
                 searchPlaces(null, 10);
             }, 5000);
         });
@@ -271,22 +271,22 @@
             clickTimer = setTimeout(() => {
                 if (isListening) {
                     if (clickCount >= 5) { isListening = false; recognition.stop(); searchPlaces(currentTranscript, 1); }
-                    else { isListening = false; recognition.stop(); speak("Canceled.", "en-US"); }
+                    else { isListening = false; recognition.stop(); speak("已取消。", "zh-TW"); }
                 } else if (isNavigating) {
-                    if (clickCount >= 5) { stopNavigation(); speak("Canceled.", "en-US"); }
-                    else if (clickCount === 1) { speak("Updating.", "en-US"); }
+                    if (clickCount >= 5) { stopNavigation(); speak("已取消。", "zh-TW"); }
+                    else if (clickCount === 1) { speak("更新中。", "zh-TW"); }
                 } else {
                     if (clickCount === 1) analyze();
                     else if (clickCount === 2) { 
                         currentFacingMode = currentFacingMode === "environment" ? "user" : "environment"; 
-                        startCamera(currentFacingMode); speak("Camera switched.", "en-US"); 
+                        startCamera(currentFacingMode); speak("鏡頭已切換。", "zh-TW"); 
                     }
                     else if (clickCount === 3) {
-                        if (autoInterval) { clearInterval(autoInterval); autoInterval = null; speak("Auto scan off.", "en-US"); }
-                        else { autoInterval = setInterval(analyze, 15000); speak("Auto scan on.", "en-US"); analyze(); }
+                        if (autoInterval) { clearInterval(autoInterval); autoInterval = null; speak("自動掃描已關閉。", "zh-TW"); }
+                        else { autoInterval = setInterval(analyze, 15000); speak("自動掃描已開啟。", "zh-TW"); analyze(); }
                     }
                     else if (clickCount === 4) {
-                        speak("Navigating to nearest place.", "en-US");
+                        speak("導航至最近地點。", "zh-TW");
                         searchPlaces(null, 1);
                     }
                     else if (clickCount >= 5) {
