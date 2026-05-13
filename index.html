@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ARGUS-VisionEcho V4.9 (Mobile TTS & Gesture Fixed)</title>
+    <title>ARGUS-VisionEcho</title>
 
     <style>
         :root { 
@@ -24,7 +24,7 @@
             margin: 0;
             overflow: hidden;
             touch-action: none;
-            user-select: none;
+            user-select: none; /* 防止連點時選取文字 */
         }
         .card {
             background: var(--card);
@@ -34,7 +34,7 @@
             width: 92%;
             text-align: center;
             border: 1px solid #1e293b;
-            pointer-events: none;
+            pointer-events: none; /* 讓點擊穿透到 body */
         }
         #log {
             pointer-events: auto;
@@ -47,7 +47,6 @@
             line-height: 1.5;
         }
         .highlight { color: var(--accent); font-weight: bold; }
-        .nav-dir { color: var(--warn); font-size: 1.4rem; font-weight: 800; display: block; margin-top: 5px; }
         .blinking { animation: blink 1.5s infinite; }
         @keyframes blink { 50% { opacity: 0.5; } }
     </style>
@@ -55,8 +54,8 @@
 
 <body>
     <div class="card">
-        <h2>ARGUS <small style="font-size: 0.6em; opacity: 0.6;">V4.9</small></h2>
-        <div id="statusTxt">Tap anywhere to unlock audio...</div>
+        <h2>ARGUS <small style="font-size: 0.6em; opacity: 0.6;"></small></h2>
+        <div id="statusTxt">Tap anywhere to unlock system...</div>
 
         <div style="height: 260px; background: #000; border-radius: 20px; margin: 15px 0; overflow: hidden; border: 2px solid #1e293b; position: relative;">
             <video id="webcam" autoplay playsinline style="width: 100%; height: 100%; object-fit: cover;"></video>
@@ -68,7 +67,7 @@
     </div>
 
     <script>
-        const KEY = "AIzaSyCbXQjFKiq5emmeJugzayHbV4sVVKMeX68";
+        const KEY = "AIzaSyCqfp6L4gTipdZdrtL7_KKZ6ntTkK4DMpw";
         const MODEL = "gemini-2.5-flash"; 
         const OVERPASS_ENDPOINTS = ["https://overpass-api.de/api/interpreter", "https://lz4.overpass-api.de/api/interpreter"];
 
@@ -85,11 +84,9 @@
         let autoInterval = null;
         let hasPlayedIntro = false;
 
-        // 更新後的長按計時器 (2秒, 4秒, 6秒)
-        let timer2s, timer4s, timer6s;
+        let timerLongPress;
         let longPressLevel = 0; 
 
-        // 導航與位置
         let userHeading = 0; 
         let isListening = false;
         let currentTranscript = "";
@@ -98,11 +95,6 @@
         let navTarget = null;
 
         /* ================= 系統工具 (TTS, Compass) ================= */
-        function initCompass() {
-            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-                DeviceOrientationEvent.requestPermission().then(res => { if (res == 'granted') window.addEventListener('deviceorientation', handleOrientation, true); });
-            } else { window.addEventListener('deviceorientation', handleOrientation, true); }
-        }
         function handleOrientation(e) {
             let h = e.webkitCompassHeading || (360 - e.alpha);
             if (h) { userHeading = h; document.getElementById("compassDebug").innerText = `Heading: ${Math.round(userHeading)}°`; }
@@ -139,9 +131,9 @@
         if (recognition) { recognition.lang = 'en-US'; recognition.continuous = true; recognition.interimResults = true; }
 
         async function startVoiceNavigation() {
-            initCompass(); stopSpeech();
+            stopSpeech();
             isListening = true; currentTranscript = "";
-            speak("Please say your destination.", "en-US");
+            speak("Voice navigation activated. Please say your destination.", "en-US");
             log.innerHTML = "Listening... (Tap 5 times to confirm)";
             recognition.onresult = (e) => {
                 currentTranscript = Array.from(e.results).map(r => r[0].transcript).join('');
@@ -150,40 +142,56 @@
             recognition.start();
         }
 
-        /* ================= 🟢 導航與地標搜尋 ================= */
-        async function searchPlaces(targetName = null, limit = 1) {
+        /* ================= 🟢 地圖與 Semantic Radar ================= */
+        async function searchPlaces(mode = 'radar', targetName = null, limit = 5) {
+            if (isProcessing) return;
             isProcessing = true;
+            
             navigator.geolocation.getCurrentPosition(async (pos) => {
                 const { latitude: lat, longitude: lon } = pos.coords;
                 try {
-                    let query = targetName 
-                        ? `[out:json];(node(around:3000,${lat},${lon})["name"~"${targetName}",i];way(around:3000,${lat},${lon})["name"~"${targetName}",i];);out center;`
-                        : `[out:json];(node(around:1000,${lat},${lon})["name"]["shop"];node(around:1000,${lat},${lon})["name"]["amenity"];);out center;`;
+                    let query = "";
+                    if (targetName) {
+                        query = `[out:json];(node(around:3000,${lat},${lon})["name"~"${targetName}",i];way(around:3000,${lat},${lon})["name"~"${targetName}",i];);out center;`;
+                    } else if (mode === 'landmark') {
+                        query = `[out:json];(node(around:1500,${lat},${lon})["public_transport"];node(around:1500,${lat},${lon})["amenity"="hospital"];);out center;`;
+                    } else {
+                        query = `[out:json];(node(around:800,${lat},${lon})["name"]["shop"];node(around:800,${lat},${lon})["name"]["amenity"];);out center;`;
+                    }
                     
                     const res = await fetch(OVERPASS_ENDPOINTS[0], { method: "POST", body: "data=" + encodeURIComponent(query) });
                     const data = await res.json();
 
-                    if (!data.elements.length) { speak("No places found.", "en-US"); isProcessing = false; return; }
+                    if (!data.elements.length) { speak("No places found nearby.", "en-US"); isProcessing = false; return; }
 
                     let places = data.elements.map(e => ({
-                        name: e.tags.name,
+                        name: e.tags.name || "Landmark",
                         lat: e.lat || e.center.lat,
                         lon: e.lon || e.center.lon,
                         dist: getDistance(lat, lon, e.lat || e.center.lat, e.lon || e.center.lon)
-                    })).sort((a, b) => a.dist - b.dist);
+                    })).filter(p => p.name !== "Landmark").sort((a, b) => a.dist - b.dist);
 
-                    if (limit === 1) {
+                    if (places.length === 0) { speak("No named places found.", "en-US"); isProcessing = false; return; }
+
+                    if (mode === 'landmark') {
+                        navTarget = places[0];
+                        speak(`Major landmark detected. ${navTarget.name} is ${navTarget.dist} meters away.`, "en-US");
+                        log.innerHTML = `Landmark: ${navTarget.name}<br>Dist: ${navTarget.dist}m`;
+                    } else if (targetName) {
                         navTarget = places[0];
                         startLiveTracking();
                     } else {
-                        let top10 = places.slice(0, 10);
-                        let text = top10.map((p, i) => `${i+1}, ${p.name}, ${p.dist} meters.`).join(" ");
+                        let topList = places.slice(0, limit);
+                        let text = topList.map(p => `${p.name}, ${p.dist} meters.`).join(" ");
                         speak("Nearby places are: " + text, "en-US");
-                        log.innerHTML = top10.map(p => `• ${p.name} (${p.dist}m)`).join("<br>");
+                        log.innerHTML = topList.map(p => `• ${p.name} (${p.dist}m)`).join("<br>");
                     }
                 } catch (e) { speak("Error connecting to map service.", "en-US"); }
                 isProcessing = false;
-            });
+            }, (err) => {
+                speak("GPS signal lost. Please move to an open area.", "en-US");
+                isProcessing = false;
+            }, { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }); 
         }
 
         function startLiveTracking() {
@@ -205,6 +213,7 @@
         /* ================= 📸 影像分析 ================= */
         async function analyze() {
             if (isProcessing) return; stopSpeech(); isProcessing = true;
+            speak("Scanning scene.", "en-US");
             log.innerHTML = "Analyzing...";
             const ctx = canvas.getContext("2d"); canvas.width = video.videoWidth; canvas.height = video.videoHeight;
             ctx.drawImage(video, 0, 0); const b64 = canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
@@ -228,84 +237,68 @@
         }
         startCamera(currentFacingMode);
 
-        /* ================= 🧠 手勢邏輯整合 (已修正行動版問題) ================= */
+        /* ================= 🧠 手勢邏輯整合 (FSM) ================= */
         document.body.addEventListener("pointerdown", (e) => {
-            // 第一次點擊尚未解鎖音訊時，不啟動任何長按計時器
             if (!hasPlayedIntro) return;
-
             longPressLevel = 0;
             
-            // 2秒：播放教學說明
-            timer2s = setTimeout(() => {
+            timerLongPress = setTimeout(() => {
                 longPressLevel = 1;
-                if (isListening || isNavigating) {
-                    speak("Canceled.", "en-US");
-                    isListening = false; if (recognition) recognition.stop();
-                    stopNavigation();
-                } else {
-                    speak("Instruction: 1 tap scan. 2 taps camera. 3 taps auto-scan. 4 taps nearest place. 5 taps voice search. Hold 6 seconds for list.", "en-US");
-                }
-            }, 2000);
-
-            // 4秒：提示即將列出清單
-            timer4s = setTimeout(() => {
-                longPressLevel = 2;
-                speak("Keep holding to list nearby places.", "en-US");
-            }, 4000);
-
-            // 6秒：真正執行清單搜尋
-            timer6s = setTimeout(() => {
-                longPressLevel = 3;
                 stopSpeech();
-                speak("Listing 10 nearby places...", "en-US");
-                searchPlaces(null, 10);
-            }, 6000);
+                speak("Semantic Radar activated. Discovering nearby places.", "en-US");
+                searchPlaces('radar', null, 5); 
+            }, 1500);
         });
 
         document.body.addEventListener("pointerup", (e) => {
-            // 處理首次進入網站的語音解鎖 (放在 pointerup 可大幅降低 iOS/Android 阻擋率)
+            // 首次點擊：解鎖系統、要求權限、播放教學語音
             if (!hasPlayedIntro) {
                 hasPlayedIntro = true;
-                window.speechSynthesis.cancel(); // 清除可能卡住的序列
+                window.speechSynthesis.cancel(); 
                 
-                // 直接指派一個 utterance 讓瀏覽器核准音訊播放權限
-                let unlockU = new SpeechSynthesisUtterance("ARGUS Online. System ready. Tap once to scan.");
+                let introText = "ARGUS Online. System ready. One tap for scene analysis. Two taps for camera. Three taps for auto mode. Four taps for landmarks. Five taps for voice navigation. Long press for semantic radar.";
+                let unlockU = new SpeechSynthesisUtterance(introText);
                 unlockU.lang = "en-US";
                 window.speechSynthesis.speak(unlockU);
                 
+                if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                    DeviceOrientationEvent.requestPermission().then(res => { 
+                        if (res == 'granted') window.addEventListener('deviceorientation', handleOrientation, true); 
+                    }).catch(console.error);
+                } else { 
+                    window.addEventListener('deviceorientation', handleOrientation, true); 
+                }
+
                 statusTxt.innerText = "● System Ready";
                 log.innerHTML = "Waiting for command...";
                 return;
             }
 
-            // 清除所有長按計時器
-            clearTimeout(timer2s); clearTimeout(timer4s); clearTimeout(timer6s);
+            clearTimeout(timerLongPress);
             
-            // 如果剛才觸發了長按事件，就不算作點擊
             if (longPressLevel > 0) return;
 
             clickCount++;
             clearTimeout(clickTimer);
             clickTimer = setTimeout(() => {
                 if (isListening) {
-                    if (clickCount >= 5) { isListening = false; recognition.stop(); searchPlaces(currentTranscript, 1); }
+                    if (clickCount >= 5) { isListening = false; recognition.stop(); searchPlaces('voice', currentTranscript, 1); }
                     else { isListening = false; recognition.stop(); speak("Canceled.", "en-US"); }
                 } else if (isNavigating) {
-                    if (clickCount >= 5) { stopNavigation(); speak("Canceled.", "en-US"); }
-                    else if (clickCount === 1) { speak("Updating route.", "en-US"); }
+                    if (clickCount >= 5) { stopNavigation(); speak("Navigation canceled.", "en-US"); }
                 } else {
-                    if (clickCount === 1) analyze();
+                    if (clickCount === 1) analyze(); 
                     else if (clickCount === 2) { 
                         currentFacingMode = currentFacingMode === "environment" ? "user" : "environment"; 
                         startCamera(currentFacingMode); speak("Camera switched.", "en-US"); 
                     }
                     else if (clickCount === 3) {
-                        if (autoInterval) { clearInterval(autoInterval); autoInterval = null; speak("Auto scan off.", "en-US"); }
-                        else { autoInterval = setInterval(analyze, 15000); speak("Auto scan on.", "en-US"); analyze(); }
+                        if (autoInterval) { clearInterval(autoInterval); autoInterval = null; speak("Auto mode off.", "en-US"); }
+                        else { autoInterval = setInterval(analyze, 15000); speak("Auto mode activated.", "en-US"); analyze(); }
                     }
                     else if (clickCount === 4) {
-                        speak("Navigating to nearest place.", "en-US");
-                        searchPlaces(null, 1);
+                        speak("Detecting major landmarks.", "en-US");
+                        searchPlaces('landmark');
                     }
                     else if (clickCount >= 5) {
                         startVoiceNavigation();
