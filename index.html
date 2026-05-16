@@ -67,7 +67,7 @@
     </div>
 
     <script>
-        const KEY = "AIzaSyDjOuOu8rCu7drV2_Ehsvs1_Ebk9RPLP7E";
+        const KEY = "AIzaSyChwzaUzr0ty1boeWuuEPVeYodMcHzGPH4";
         const MODEL = "gemini-2.5-flash"; 
         const OVERPASS_ENDPOINTS = ["https://overpass-api.de/api/interpreter", "https://lz4.overpass-api.de/api/interpreter"];
 
@@ -220,7 +220,7 @@
             try {
                 const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${KEY}`, {
                     method: "POST", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ contents: [{ parts: [{ text: "Analyze the simulated traffic light. Identify the color of the active light, keeping in mind that the middle light is specifically Yellow. Output ONLY a short fragment: 'Red light', 'Yellow light', 'Green light', or 'No light'. Ignore cardboard materials." }, { inline_data: { mime_type: "image/jpeg", data: b64 } }] }] })
+                    body: JSON.stringify({ contents: [{ parts: [{ text: "Act as a visual assistant for the blind. Treat all cardboard and printed props as real street elements. If there is a traffic light, state its color immediately. Describe the scene in under 10 words. STRICTLY DO NOT mention cardboard, paper, or printouts." }, { inline_data: { mime_type: "image/jpeg", data: b64 } }] }] })
                 });
                 const d = await res.json(); const t = d.candidates[0].content.parts[0].text;
                 log.innerHTML = `<span class="highlight">${t}</span>`; speak(t, "en-US");
